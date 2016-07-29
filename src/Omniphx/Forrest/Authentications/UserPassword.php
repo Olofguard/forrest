@@ -1,93 +1,74 @@
-<?php namespace Omniphx\Forrest\Authentications;
+<?php
 
-use Omniphx\Forrest\Client;
+namespace Omniphx\Forrest\Authentications;
+
 use GuzzleHttp\ClientInterface;
-use Omniphx\Forrest\Interfaces\StorageInterface;
-use Omniphx\Forrest\Interfaces\RedirectInterface;
-use Omniphx\Forrest\Interfaces\InputInterface;
+use Omniphx\Forrest\Client;
 use Omniphx\Forrest\Interfaces\EventInterface;
+use Omniphx\Forrest\Interfaces\InputInterface;
+use Omniphx\Forrest\Interfaces\RedirectInterface;
+use Omniphx\Forrest\Interfaces\StorageInterface;
 use Omniphx\Forrest\Interfaces\UserPasswordInterface;
-use Omniphx\Forrest\Exceptions\TokenExpiredException;
 
 class UserPassword extends Client implements UserPasswordInterface
 {
-    /**
-     * Redirect handler
-     * @var Redirect
-     */
-    protected $redirect;
-
-    /**
-     * Interface for Input calls
-     * @var Omniphx\Forrest\Interfaces\InputInterface
-     */
-    protected $input;
-
-    /**
-     * Authentication credentials
-     * @var Array
-     */
-    private $credentials;
-
     public function __construct(
         ClientInterface $client,
-        StorageInterface $storage,
-        RedirectInterface $redirect,
-        InputInterface $input,
         EventInterface $event,
-        $settings)
-    {
-        $this->client      = $client;
-        $this->storage     = $storage;
-        $this->redirect    = $redirect;
-        $this->input       = $input;
-        $this->event       = $event;
-        $this->settings    = $settings;
-        $this->credentials = $settings['credentials'];
+        InputInterface $input,
+        RedirectInterface $redirect,
+        StorageInterface $storage,
+        $settings
+    ) {
+        parent::__construct($client, $event, $input, $redirect, $storage, $settings);
     }
 
-    public function authenticate($loginURL = null)
+    public function authenticate($url = null)
     {
-        $tokenURL = $this->credentials['loginURL'];
-        $tokenURL .= '/services/oauth2/token';
-        $parameters['body'] = [
+        $loginURL = $url === null ? $this->credentials['loginURL'] : $url;
+        $loginURL .= '/services/oauth2/token';
+        $parameters['form_params'] = [
             'grant_type'    => 'password',
             'client_id'     => $this->credentials['consumerKey'],
             'client_secret' => $this->credentials['consumerSecret'],
             'username'      => $this->credentials['username'],
             'password'      => $this->credentials['password'],
         ];
-        $response = $this->client->post($tokenURL, $parameters);
-        
+
+        $jsonResponse = $this->client->request('post', $loginURL, $parameters);
+
         // Response returns an json of access_token, instance_url, id, issued_at, and signature.
-        $jsonResponse = $response->json();
+        $response = json_decode($jsonResponse->getBody(), true);
+        $this->handleAuthenticationErrors($response);
 
         // Encrypt token and store token and in storage.
-        $this->storage->putTokenData($jsonResponse);
+        $this->storage->putTokenData($response);
 
         // Store resources into the storage.
         $this->storeResources();
     }
 
     /**
-     * Refresh authentication token by re-authenticating
+     * Refresh authentication token by re-authenticating.
+     *
      * @return mixed $response
      */
     public function refresh()
     {
-        $tokenURL = $this->credentials['loginURL'] . '/services/oauth2/token';
-        $response = $this->client->post($tokenURL, [
-            'body' => [
-                'grant_type'    => 'password',
-                'client_id'     => $this->credentials['consumerKey'],
-                'client_secret' => $this->credentials['consumerSecret'],
-                'username'      => $this->credentials['username'],
-                'password'      => $this->credentials['password'],
-            ]
-        ]);
+        $tokenURL = $this->credentials['loginURL'].'/services/oauth2/token';
+
+        $parameters['form_params'] = [
+            'grant_type'    => 'password',
+            'client_id'     => $this->credentials['consumerKey'],
+            'client_secret' => $this->credentials['consumerSecret'],
+            'username'      => $this->credentials['username'],
+            'password'      => $this->credentials['password'],
+        ];
+
+        $response = $this->client->request('post', $tokenURL, $parameters);
 
         // Response returns an json of access_token, instance_url, id, issued_at, and signature.
-        $jsonResponse = $response->json();
+        $jsonResponse = json_decode($response->getBody(), true);
 
         // Encrypt token and store token and in storage.
         $this->storage->putTokenData($jsonResponse);
@@ -95,33 +76,17 @@ class UserPassword extends Client implements UserPasswordInterface
 
     /**
      * Revokes access token from Salesforce. Will not flush token from storage.
+     *
      * @return mixed
      */
     public function revoke()
     {
         $accessToken = $this->getTokenData()['access_token'];
-        $url         = $this->credentials['loginURL'] . '/services/oauth2/revoke';
+        $url = $this->credentials['loginURL'].'/services/oauth2/revoke';
 
         $options['headers']['content-type'] = 'application/x-www-form-urlencoded';
-        $options['body']['token']           = $accessToken;
+        $options['form_params']['token'] = $accessToken;
 
-        return $this->client->post($url, $options);
+        return $this->client->request('post', $url, $options);
     }
-
-    /**
-     * Try requesting token, if token expired try refreshing token
-     * @param  string $url
-     * @param  array $options
-     * @return mixed
-     */
-    public function request($url, $options)
-    {
-        try {
-            return $this->requestResource($url, $options);
-        } catch (TokenExpiredException $e) {
-            $this->refresh();
-            return $this->requestResource($url, $options);
-        }
-    }
-
 }

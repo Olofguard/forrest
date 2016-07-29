@@ -1,145 +1,243 @@
-<?php namespace Omniphx\Forrest;
+<?php
 
-abstract class Client {
+namespace Omniphx\Forrest;
 
+use GuzzleHttp\ClientInterface;
+use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Message\ResponseInterface;
+use Omniphx\Forrest\Exceptions\InvalidLoginCreditialsException;
+use Omniphx\Forrest\Exceptions\SalesforceException;
+use Omniphx\Forrest\Exceptions\TokenExpiredException;
+use Omniphx\Forrest\Interfaces\EventInterface;
+use Omniphx\Forrest\Interfaces\InputInterface;
+use Omniphx\Forrest\Interfaces\RedirectInterface;
+use Omniphx\Forrest\Interfaces\StorageInterface;
+
+/**
+ * API resources.
+ *
+ * @method ClientInterface chatter(array $options = [])
+ * @method ClientInterface tabs(array $options = [])
+ * @method ClientInterface appMenu(array $options = [])
+ * @method ClientInterface quickActions(array $options = [])
+ * @method ClientInterface queryAll(array $options = [])
+ * @method ClientInterface commerce(array $options = [])
+ * @method ClientInterface wave(array $options = [])
+ * @method ClientInterface exchange-connect(array $options = [])
+ * @method ClientInterface analytics(array $options = [])
+ * @method ClientInterface identity(array $options = [])
+ * @method ClientInterface composite(array $options = [])
+ * @method ClientInterface theme(array $options = [])
+ * @method ClientInterface nouns(array $options = [])
+ * @method ClientInterface recent(array $options = [])
+ * @method ClientInterface licensing(array $options = [])
+ * @method ClientInterface limits(array $options = [])
+ * @method ClientInterface async-queries(array $options = [])
+ * @method ClientInterface emailConnect(array $options = [])
+ * @method ClientInterface compactLayouts(array $options = [])
+ * @method ClientInterface flexiPage(array $options = [])
+ * @method ClientInterface knowledgeManagement(array $options = [])
+ * @method ClientInterface sobjects(array $options = [])
+ * @method ClientInterface actions(array $options = [])
+ * @method ClientInterface support(array $options = [])
+ *
+ * Note: Not all methods are available to certain orgs/licenses
+ *
+ * search() and query() are not overloaded with the __call() method, this is because queries require urlencoding. I'm open to a more elegant solution, but prefer to leave it this way to make it simple to use.
+ */
+abstract class Client
+{
     /**
-     * HTTP request client
-     * @var Client
+     * HTTP request client.
+     *
+     * @var ClientInterface
      */
     protected $client;
 
     /**
-     * Config options
+     * Event emitter.
+     *
+     * @var Interfaces\EventInterface
+     */
+    protected $event;
+
+    /**
+     * Config options.
+     *
      * @var array
      */
     protected $settings;
 
     /**
-     * Storage handler
-     * @var storage
+     * Storage handler.
+     *
+     * @var Interfaces\StorageInterface
      */
     protected $storage;
 
     /**
-     * Reqeust headers
-     * @var Array
+     * Token data.
+     *
+     * @var array
+     */
+    protected $tokenData;
+
+    /**
+     * Redirect handler.
+     *
+     * @var RedirectInterface
+     */
+    protected $redirect;
+
+    /**
+     * Inteface for Input calls.
+     *
+     * @var \Omniphx\Forrest\Interfaces\InputInterface
+     */
+    protected $input;
+
+    /**
+     * Authentication credentials.
+     *
+     * @var array
+     */
+    protected $credentials;
+
+    /**
+     * Request headers.
+     *
+     * @var array
      */
     private $headers;
 
-    /**
-     * GET method call using any custom path
-     * @param string $path
-     * @param array $requestBody
-     * @param array $options
-     */
-    public function get($path, $requestBody = array(), $options = array()) {
-        $url = $this->getInstanceUrl();
-        $url .= '/'.trim($path, "/\t\n\r\0\x0B");
-
-        $options['method'] = 'GET';
-        if($requestBody) {
-            $options['body'] = $requestBody;
-        }
-
-        return $this->request($url, $options);
+    public function __construct(
+        ClientInterface $client,
+        EventInterface $event,
+        InputInterface $input,
+        RedirectInterface $redirect,
+        StorageInterface $storage,
+        $settings
+    ) {
+        $this->client = $client;
+        $this->storage = $storage;
+        $this->redirect = $redirect;
+        $this->input = $input;
+        $this->event = $event;
+        $this->settings = $settings;
+        $this->credentials = $settings['credentials'];
     }
 
     /**
-     * POST method call using any custom path
-     * @param string $path
-     * @param array $requestBody
-     * @param array $options
+     * Try requesting token, if token expired try refreshing token.
+     *
+     * @param string $url
+     * @param array  $options
+     *
+     * @return mixed
      */
-    public function post($path, $requestBody = array(), $options = array()) {
-        $url = $this->getInstanceUrl();
-        $url .= '/'.trim($path, "/\t\n\r\0\x0B");
+    public function request($url, $options)
+    {
+        try {
+            return $this->requestResource($url, $options);
+        } catch (TokenExpiredException $e) {
+            $this->refresh();
 
-        $options['method'] = 'POST';
-        if($requestBody) {
-            $options['body'] = $requestBody;
+            return $this->requestResource($url, $options);
         }
-
-        return $this->request($url, $options);
     }
 
     /**
-     * PUT method call using any custom path
+     * GET method call using any custom path.
+     *
      * @param string $path
-     * @param array $requestBody
-     * @param array $options
+     * @param array  $requestBody
+     * @param array  $options
+     *
+     * @return mixed
      */
-    public function put($path, $requestBody = array(), $options = array()) {
-        $url = $this->getInstanceUrl();
-        $url .= '/'.trim($path, "/\t\n\r\0\x0B");
-
-        $options['method'] = 'PUT';
-        if($requestBody) {
-            $options['body'] = $requestBody;
-        }
-
-        return $this->request($url, $options);
+    public function get($path, $requestBody = [], $options = [])
+    {
+        return $this->sendRequest($path, $requestBody, $options, 'GET');
     }
 
     /**
-     * DELETE method call using any custom path
+     * POST method call using any custom path.
+     *
      * @param string $path
-     * @param array $requestBody
-     * @param array $options
+     * @param array  $requestBody
+     * @param array  $options
+     *
+     * @return mixed
      */
-    public function delete($path, $requestBody = array(), $options = array()) {
-        $url = $this->getInstanceUrl();
-        $url .= '/'.trim($path, "/\t\n\r\0\x0B");
-
-        $options['method'] = 'DELETE';
-        if($requestBody) {
-            $options['body'] = $requestBody;
-        }
-
-        return $this->request($url, $options);
+    public function post($path, $requestBody = [], $options = [])
+    {
+        return $this->sendRequest($path, $requestBody, $options, 'POST');
     }
 
     /**
-     * HEAD method call using any custom path
+     * PUT method call using any custom path.
+     *
      * @param string $path
-     * @param array $requestBody
-     * @param array $options
+     * @param array  $requestBody
+     * @param array  $options
+     *
+     * @return mixed
      */
-    public function head($path, $requestBody = array(), $options = array()) {
-        $url = $this->getInstanceUrl();
-        $url .= '/'.trim($path, "/\t\n\r\0\x0B");
-
-        $options['method'] = 'HEAD';
-        if($requestBody) {
-            $options['body'] = $requestBody;
-        }
-
-        return $this->request($url, $options);
+    public function put($path, $requestBody = [], $options = [])
+    {
+        return $this->sendRequest($path, $requestBody, $options, 'PUT');
     }
 
     /**
-     * PATCH method call using any custom path
+     * DELETE method call using any custom path.
+     *
      * @param string $path
-     * @param array $requestBody
-     * @param array $options
+     * @param array  $requestBody
+     * @param array  $options
+     *
+     * @return mixed
      */
-    public function patch($path, $requestBody = array(), $options = array()) {
-        $url = $this->getInstanceUrl();
-        $url .= '/'.trim($path, "/\t\n\r\0\x0B");
+    public function delete($path, $requestBody = [], $options = [])
+    {
+        return $this->sendRequest($path, $requestBody, $options, 'DELETE');
+    }
 
-        $options['method'] = 'PATCH';
-        if($requestBody) {
-            $options['body'] = $requestBody;
-        }
+    /**
+     * HEAD method call using any custom path.
+     *
+     * @param string $path
+     * @param array  $requestBody
+     * @param array  $options
+     *
+     * @return mixed
+     */
+    public function head($path, $requestBody = [], $options = [])
+    {
+        return $this->sendRequest($path, $requestBody, $options, 'HEAD');
+    }
 
-        return $this->request($url, $options);
+    /**
+     * PATCH method call using any custom path.
+     *
+     * @param string $path
+     * @param array  $requestBody
+     * @param array  $options
+     *
+     * @return mixed
+     */
+    public function patch($path, $requestBody = [], $options = [])
+    {
+        return $this->sendRequest($path, $requestBody, $options, 'PATCH');
     }
 
     /**
      * Request that returns all currently supported versions.
      * Includes the verison, label and link to each version's root.
      * Formats: json, xml
-     * Methods: get
-     * @param  array  $options
+     * Methods: get.
+     *
+     * @param array $options
+     *
      * @return array $versions
      */
     public function versions($options = [])
@@ -156,8 +254,10 @@ abstract class Client {
      * Lists availabe resources for specified API version.
      * Includes resource name and URI.
      * Formats: json, xml
-     * Methods: get
-     * @param  array $options
+     * Methods: get.
+     *
+     * @param array $options
+     *
      * @return array $resources
      */
     public function resources($options = [])
@@ -172,14 +272,16 @@ abstract class Client {
 
     /**
      * Returns information about the logged-in user.
+     *
      * @param  array
+     *
      * @return array $identity
      */
-    public function identity($options =[])
+    public function identity($options = [])
     {
-        $token       = $this->getTokenData();
+        $token = $this->getTokenData();
         $accessToken = $token['access_token'];
-        $url         = $token['id'];
+        $url = $token['id'];
 
         $options['headers']['Authorization'] = "OAuth $accessToken";
 
@@ -192,10 +294,12 @@ abstract class Client {
      * Lists information about organizational limits.
      * Available for API version 29.0 and later.
      * Returns limits for daily API calls, Data storage, etc.
-     * @param  array $options
+     *
+     * @param array $options
+     *
      * @return array $limits
      */
-    public function limits($options =[])
+    public function limits($options = [])
     {
         $url = $this->getInstanceUrl();
         $url .= $this->storage->get('version')['url'];
@@ -207,10 +311,13 @@ abstract class Client {
     }
 
     /**
-     * Describes all global objects availabe in the organization.
+     * Describes all global objects available in the organization.
+     *
+     * @param array $options
+     *
      * @return array
      */
-    public function describe($options =[])
+    public function describe($options = [])
     {
         $url = $this->getInstanceUrl();
         $url .= $this->storage->get('version')['url'];
@@ -223,8 +330,10 @@ abstract class Client {
 
     /**
      * Executes a specified SOQL query.
-     * @param  string $query
-     * @param  array $options
+     *
+     * @param string $query
+     * @param array  $options
+     *
      * @return array $queryResults
      */
     public function query($query, $options = [])
@@ -238,9 +347,10 @@ abstract class Client {
 
         return $queryResults;
     }
-    
+
     /**
-     * Calls next query
+     * Calls next query.
+     *
      * @param       $nextUrl
      * @param array $options
      *
@@ -258,9 +368,11 @@ abstract class Client {
 
     /**
      * Details how Salesforce will process your query.
-     * Available for API verison 30.0 or later
-     * @param  string $query
-     * @param  array $options
+     * Available for API verison 30.0 or later.
+     *
+     * @param string $query
+     * @param array  $options
+     *
      * @return array $queryExplain
      */
     public function queryExplain($query, $options = [])
@@ -278,12 +390,14 @@ abstract class Client {
     /**
      * Executes a SOQL query, but will also returned records that have
      * been deleted.
-     * Available for API version 29.0 or later
-     * @param  string $query
-     * @param  array $options
+     * Available for API version 29.0 or later.
+     *
+     * @param string $query
+     * @param array  $options
+     *
      * @return array $queryResults
      */
-    public function queryAll($query,$options = [])
+    public function queryAll($query, $options = [])
     {
         $url = $this->getInstanceUrl();
         $url .= $this->storage->get('resources')['queryAll'];
@@ -296,12 +410,14 @@ abstract class Client {
     }
 
     /**
-     * Executes the specified SOSL query
-     * @param  string $query
-     * @param  array $options
+     * Executes the specified SOSL query.
+     *
+     * @param string $query
+     * @param array  $options
+     *
      * @return array
      */
-    public function search($query,$options = [])
+    public function search($query, $options = [])
     {
         $url = $this->getInstanceUrl();
         $url .= $this->storage->get('resources')['search'];
@@ -319,7 +435,9 @@ abstract class Client {
      * objects the user interacts with and how often and arranges the
      * search results accordingly. Objects used most frequently appear
      * at the top of the list.
-     * @param  array $options
+     *
+     * @param array $options
+     *
      * @return array
      */
     public function scopeOrder($options = [])
@@ -335,11 +453,13 @@ abstract class Client {
 
     /**
      * Returns search result layout information for the objects in the query string.
-     * @param  array $objectList
-     * @param  array $options
+     *
+     * @param array $objectList
+     * @param array $options
+     *
      * @return array
      */
-    public function searchLayouts($objectList,$options = [])
+    public function searchLayouts($objectList, $options = [])
     {
         $url = $this->getInstanceUrl();
         $url .= $this->storage->get('resources')['search'];
@@ -355,13 +475,14 @@ abstract class Client {
      * Returns a list of Salesforce Knowledge articles whose titles match the user’s
      * search query. Provides a shortcut to navigate directly to likely
      * relevant articles, before the user performs a search.
-     * Available for API version 30.0 or later
-     * @param  string $query
-     * @param  array $searchParameters
-     * @param  array $option
+     * Available for API version 30.0 or later.
+     *
+     * @param string $query
+     * @param array  $options
+     *
      * @return array
      */
-    public function suggestedArticles($query,$options = [])
+    public function suggestedArticles($query, $options = [])
     {
         $url = $this->getInstanceUrl();
         $url .= $this->storage->get('resources')['search'];
@@ -370,11 +491,12 @@ abstract class Client {
 
         $parameters = [
             'language'      => $this->settings['language'],
-            'publishStatus' => 'Online'];
+            'publishStatus' => 'Online',
+        ];
 
         if (isset($options['parameters'])) {
             $parameters = array_replace_recursive($parameters, $options['parameters']);
-            $url .= '&' . http_build_query($parameters);
+            $url .= '&'.http_build_query($parameters);
         }
 
         $suggestedArticles = $this->request($url, $options);
@@ -389,11 +511,12 @@ abstract class Client {
      *
      * Tested this and can't get it to work. I think the request is set up correctly.
      *
-     * @param  string $query
-     * @param  array $options
+     * @param string $query
+     * @param array  $options
+     *
      * @return array
      */
-    public function suggestedQueries($query,$options = [])
+    public function suggestedQueries($query, $options = [])
     {
         $url = $this->getInstanceUrl();
         $url .= $this->storage->get('resources')['search'];
@@ -404,7 +527,7 @@ abstract class Client {
 
         if (isset($options['parameters'])) {
             $parameters = array_replace_recursive($parameters, $options['parameters']);
-            $url .= '&' . http_build_query($parameters);
+            $url .= '&'.http_build_query($parameters);
         }
 
         $suggestedQueries = $this->request($url, $options);
@@ -413,9 +536,11 @@ abstract class Client {
     }
 
     /**
-     * Request to a custom Apex REST endpoint
-     * @param  String $customURI
-     * @param  Array $option
+     * Request to a custom Apex REST endpoint.
+     *
+     * @param string $customURI
+     * @param array  $options
+     *
      * @return mixed
      */
     public function custom($customURI, $options = [])
@@ -428,16 +553,16 @@ abstract class Client {
 
         if (isset($options['parameters'])) {
             $parameters = array_replace_recursive($parameters, $options['parameters']);
-            $url .= '?' . http_build_query($parameters);
+            $url .= '?'.http_build_query($parameters);
         }
 
         return $this->request($url, $options);
     }
 
     /**
-     * Public accessor to the Guzzle Client Object
+     * Public accessor to the Guzzle Client Object.
      *
-     * @return GuzzleHttp\ClientInterface
+     * @return ClientInterface
      */
     public function getClient()
     {
@@ -449,11 +574,13 @@ abstract class Client {
      * user. Reference Force.com's REST API guide to read about more
      * methods that can be called or refence them by calling the
      * Session::get('resources') method.
-     * @param  string $name
-     * @param  array $arguments
+     *
+     * @param string $name
+     * @param array  $arguments
+     *
      * @return array
      */
-    public function __call($name,$arguments)
+    public function __call($name, $arguments)
     {
         $url = $this->getInstanceUrl();
         $url .= $this->storage->get('resources')[$name];
@@ -463,8 +590,7 @@ abstract class Client {
         if (isset($arguments[0])) {
             if (is_string($arguments[0])) {
                 $url .= "/$arguments[0]";
-            }
-            else if (is_array($arguments[0])){
+            } elseif (is_array($arguments[0])) {
                 foreach ($arguments[0] as $key => $value) {
                     $options[$key] = $value;
                 }
@@ -483,24 +609,44 @@ abstract class Client {
     }
 
     /**
-     * Get token
+     * Get token.
+     *
      * @return array
      */
     public function getTokenData()
     {
-        return $this->storage->getTokenData();
+        if (empty($this->tokenData)) {
+            $this->tokenData = (array) $this->storage->getTokenData();
+        }
+
+        return $this->tokenData;
     }
 
     /**
-     * Get the instance URL
+     * Refresh authentication token.
+     *
+     * @return mixed $response
+     */
+    abstract public function refresh();
+
+    /**
+     * Revokes access token from Salesforce. Will not flush token from storage.
+     *
+     * @return mixed
+     */
+    abstract public function revoke();
+
+    /**
+     * Get the instance URL.
+     *
      * @return string
      */
     protected function getInstanceUrl()
     {
         $url = $this->settings['instanceURL'];
 
-        if (empty($url)){
-            $url  = $this->getTokenData()['instance_url'];
+        if (empty($url)) {
+            $url = $this->getTokenData()['instance_url'];
         }
 
         return $url;
@@ -511,22 +657,21 @@ abstract class Client {
      * assign the latest version number available to the user's instance.
      * Once a version number is determined, it will be stored in the user's
      * storage with the 'version' key.
+     *
      * @return void
      */
     protected function storeVersion()
     {
         $configVersion = $this->settings['version'];
-
-        if ($configVersion != null){
-            $versions = $this->versions(['format'=>'json']);
+        if ($configVersion != null) {
+            $versions = $this->versions(['format' => 'json']);
             foreach ($versions as $version) {
-                if ($version['version'] == $configVersion){
-                    $this->storage->put('version',$version);
+                if ($version['version'] == $configVersion) {
+                    $this->storage->put('version', $version);
                 }
             }
-        }
-        else {
-            $versions = $this->versions(['format'=>'json']);
+        } else {
+            $versions = $this->versions(['format' => 'json']);
             $latestVersion = end($versions);
             $this->storage->put('version', $latestVersion);
         }
@@ -536,26 +681,27 @@ abstract class Client {
      * Checks to see if version is specified. If not then call storeVersion.
      * Once a version is determined, determine the available resources the
      * user has access to and store them in teh user's sesion.
+     *
      * @return void
      */
     protected function storeResources()
     {
         try {
-            $version = $this->storage->get('version');
-            $resources = $this->resources(['format'=>'json']);
-            $this->storage->put('resources', $resources);
-        }
-        catch (\Exception $e) {
+            $this->storage->get('version');
+        } catch (\Exception $e) {
             $this->storeVersion();
-            $resources = $this->resources(['format'=>'json']);
-            $this->storage->put('resources', $resources);
         }
+
+        $resources = $this->resources(['format' => 'json']);
+        $this->storage->put('resources', $resources);
     }
 
     /**
-     * Method returns the response for the requested resource
-     * @param  string $pURI
-     * @param  array  $pOptions
+     * Method returns the response for the requested resource.
+     *
+     * @param string $pURL
+     * @param array  $pOptions
+     *
      * @return mixed
      */
     protected function requestResource($pURL, array $pOptions)
@@ -573,35 +719,38 @@ abstract class Client {
             $parameters['body'] = $this->formatBody($options);
         }
 
-        $request = $this->client->createRequest($method,$pURL,$parameters);
-
         try {
-            $response = $this->client->send($request);
-
-            $this->event->fire('forrest.response', array($request, $response));
+            $response = $this->client->request($method, $pURL, $parameters);
+            $this->event->fire('forrest.response', [$response]);
 
             return $this->responseFormat($response, $format);
-
-        } catch(RequestException $e) {
+        } catch (RequestException $e) {
             $this->assignExceptions($e);
         }
 
+        return '';
+    }
 
+    protected function handleAuthenticationErrors(array $response)
+    {
+        if (isset($response['error'])) {
+            throw new InvalidLoginCreditialsException($response['error_description']);
+        }
     }
 
     /**
-     * Set the headers for the request
+     * Set the headers for the request.
+     *
      * @param array $options
+     *
      * @return array $headers
      */
     private function setHeaders(array $options)
     {
-        $format = $options['format'];
-
-        $authToken = $this->storage->getTokenData();
+        $authToken = $this->getTokenData();
 
         $accessToken = $authToken['access_token'];
-        $tokenType   = $authToken['token_type'];
+        $tokenType = $authToken['token_type'];
 
         $this->headers['Authorization'] = "$tokenType $accessToken";
 
@@ -610,37 +759,59 @@ abstract class Client {
     }
 
     /**
-     * Format the body for the request
+     * Format the body for the request.
+     *
      * @param array $options
+     *
      * @return array $body
      */
     private function formatBody(array $options)
     {
         $format = $options['format'];
-        $data   = $options['body'];
+        $data = $options['body'];
+        $body = '';
 
         if ($format == 'json') {
             $body = json_encode($data);
-        }
-        else if($format == 'xml') {
+        } elseif ($format == 'xml') {
             $body = urlencode($data);
         }
 
         return $body;
     }
 
-    //Need to think through this for it to work
+    /**
+     * Prepares options and sends the request.
+     *
+     * @param $path
+     * @param $requestBody
+     * @param $options
+     * @param $method
+     *
+     * @return mixed
+     */
+    private function sendRequest($path, $requestBody, $options, $method)
+    {
+        $url = $this->getInstanceUrl();
+        $url .= '/'.trim($path, "/\t\n\r\0\x0B");
+
+        $options['method'] = $method;
+        if (!empty($requestBody)) {
+            $options['body'] = $requestBody;
+        }
+
+        return $this->request($url, $options);
+    }
+
     private function setRequestFormat($format)
     {
         if ($format == 'json') {
             $this->headers['Accept'] = 'application/json';
             $this->headers['Content-Type'] = 'application/json';
-        }
-        else if ($format == 'xml') {
+        } elseif ($format == 'xml') {
             $this->headers['Accept'] = 'application/xml';
             $this->headers['Content-Type'] = 'application/xml';
-        }
-        else if ($format == 'urlencoded') {
+        } elseif ($format == 'urlencoded') {
             $this->headers['Accept'] = 'application/x-www-form-urlencoded';
             $this->headers['Content-Type'] = 'application/x-www-form-urlencoded';
         }
@@ -655,37 +826,47 @@ abstract class Client {
     }
 
     /**
-     * Returns the response in the configured  format
-     * @param  Response $response
-     * @param  string $format
+     * Returns the response in the configured format.
+     *
+     * @param ResponseInterface $response
+     * @param string            $format
+     *
      * @return mixed $response
      */
-    private function responseFormat($response,$format)
+    private function responseFormat($response, $format)
     {
         if ($format == 'json') {
-            return $response->json();
-        }
-        else if ($format == 'xml') {
-            return $response->xml();
+            $responseJSON = $response->getBody();
+            $decodedJSON = json_decode($responseJSON, true);
+
+            return $decodedJSON;
+        } elseif ($format == 'xml') {
+            $body = $response->getBody();
+            $contents = (string) $body;
+            $decodedXML = simplexml_load_string($contents);
+
+            return $decodedXML;
         }
 
-        return $response;
+        return $response->getBody();
     }
 
     /**
-     * Method will elaborate on RequestException
-     * @param  GuzzleHttp\Exception\ClientException $e
-     * @return mixed
+     * Method will elaborate on RequestException.
+     *
+     * @param RequestException $e
+     *
+     * @throws SalesforceException
+     * @throws TokenExpiredException
      */
-    private function assignExceptions($e)
+    private function assignExceptions(RequestException $e)
     {
-        if ($e->hasResponse() && $e->getResponse()->getStatusCode() == '401') {
-            throw new TokenExpiredException(sprintf("Salesforce token has expired"));
-        } else if($e->hasResponse()){
-            throw new SalesforceException(sprintf("Salesforce response error: %s",$e->getResponse()));
+        if ($e->hasResponse() && $e->getResponse()->getStatusCode() == 401) {
+            throw new TokenExpiredException('Salesforce token has expired', $e);
+        } elseif ($e->hasResponse()) {
+            throw new SalesforceException('Salesforce response error', $e);
         } else {
-            throw new SalesforceException(sprintf("Invalid request: %s",$e->getRequest()));
+            throw new SalesforceException('Invalid request: %s', $e);
         }
     }
-
 }

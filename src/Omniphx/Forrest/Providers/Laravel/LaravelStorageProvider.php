@@ -1,56 +1,69 @@
-<?php namespace Omniphx\Forrest\Providers\Laravel;
+<?php
 
-use Omniphx\Forrest\Interfaces\StorageInterface;
-use Omniphx\Forrest\Exceptions\MissingTokenException;
+namespace Omniphx\Forrest\Providers\Laravel;
+
+use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Facades\Crypt;
 use Omniphx\Forrest\Exceptions\MissingRefreshTokenException;
-use Crypt;
+use Omniphx\Forrest\Exceptions\MissingTokenException;
+use Omniphx\Forrest\Interfaces\StorageInterface;
 
-abstract class LaravelStorageProvider implements StorageInterface {
-
+abstract class LaravelStorageProvider implements StorageInterface
+{
     /**
      * Encrypt authentication token and store it in session.
+     *
      * @param array $token
+     *
      * @return void
      */
     public function putTokenData($token)
     {
         $encryptedToken = Crypt::encrypt($token);
+
         return $this->put('token', $encryptedToken);
     }
 
     /**
      * Get token from the session and decrypt it.
+     *
      * @return mixed
      */
     public function getTokenData()
     {
         if ($this->has('token')) {
             $token = $this->get('token');
+
             return Crypt::decrypt($token);
         }
 
-        throw new MissingTokenException(sprintf('No token available in \''.\Config::get('forrest.storage.type').'\' storage'));
+        throw new MissingTokenException(sprintf('No token available in \''.Config::get('forrest.storage.type').'\' storage'));
     }
 
     /**
      * Encrypt refresh token and pass into session.
-     * @param  Array $token
+     *
+     * @param array $token
+     *
      * @return void
      */
     public function putRefreshToken($token)
     {
         $encryptedToken = Crypt::encrypt($token);
+
         return $this->put('refresh_token', $encryptedToken);
     }
 
     /**
      * Get refresh token from session and decrypt it.
+     *
      * @return mixed
      */
     public function getRefreshToken()
     {
         if ($this->has('refresh_token')) {
             $token = $this->get('refresh_token');
+
             return Crypt::decrypt($token);
         }
 
